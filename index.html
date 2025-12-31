@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Sistema de Control y Monitoreo</title>
+
+<style>
+body{
+  background:#2e2e2e;
+  color:#fff;
+  font-family:Arial;
+  text-align:center;
+}
+h1{color:#ff4444}
+h2{color:#00cfff}
+
+.container{
+  display:flex;
+  justify-content:center;
+  flex-wrap:wrap;
+}
+
+.box{
+  background:#1f1f1f;
+  border:2px solid #444;
+  border-radius:10px;
+  padding:15px;
+  margin:10px;
+  width:360px;
+}
+
+.row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+
+.value{
+  font-size:2em;
+  color:#00ffcc;
+}
+
+.max{
+  font-size:14px;
+  color:#ccc;
+}
+
+canvas{
+  background:#000;
+  border:1px solid #555;
+}
+
+button{
+  padding:8px 15px;
+  margin:5px;
+  font-size:15px;
+  cursor:pointer;
+}
+
+.led{
+  width:20px;
+  height:20px;
+  border-radius:50%;
+  margin:8px auto;
+  background:gray;
+}
+</style>
+</head>
+
+<body>
+
+<h1>SISTEMA DE CONTROL Y MONITOREO</h1>
+<h2>Automatización e Instrumentación</h2>
+<p><b>William Pallo – Christopher Nacimba</b></p>
+<p>SISTEMA DE PREDICCIÓN DE FALLOS INDUSTRIALES</p>
+
+<button onclick="connect()">Conectar Bluetooth</button>
+<p id="status">Estado: Desconectado</p>
+
+<div class="container">
+
+<!-- GESTO 1 -->
+<div class="box">
+  <h3 style="color:red">Gestos 1 – Bobinado</h3>
+  <div class="row">
+    <div>
+      <div class="value" id="g1">0.0000</div>
+      <div class="max">MAX: <span id="g1max">0.0000</span></div>
+    </div>
+    <canvas id="osc1" width="180" height="80"></canvas>
+  </div>
+</div>
+
+<!-- GESTO 2 -->
+<div class="box">
+  <h3 style="color:orange">Gestos 2 – Rodamiento</h3>
+  <div class="row">
+    <div>
+      <div class="value" id="g2">0.0000</div>
+      <div class="max">MAX: <span id="g2max">0.0000</span></div>
+    </div>
+    <canvas id="osc2" width="180" height="80"></canvas>
+  </div>
+</div>
+
+<!-- MOTOR -->
+<div class="box">
+  <h3>CONTROL MOTOR</h3>
+  <button onclick="rearme()">REARME</button>
+  <div id="motorLed" class="led"></div>
+  <p id="motorTxt">Motor: OFF</p>
+</div>
+
+<!-- LUBRICACIÓN -->
+<div class="box">
+  <h3 style="color:#00aaff">SISTEMA DE LUBRICACIÓN</h3>
+  <button onclick="lubOn()">LUBRICAR</button>
+  <button onclick="lubOff()">DETENER</button>
+  <div id="lubLed" class="led"></div>
+  <p id="lubTxt">Lubricador: OFF</p>
+</div>
+
+<!-- HISTÓRICO -->
+<div class="box">
+  <h3>Histórico de Fallas</h3>
+  <ul id="historial" style="text-align:left;font-size:14px;"></ul>
+</div>
+
+</div>
+
+<script>
+let characteristic, rxCharacteristic;
+let g1max=0, g2max=0;
+let buf1=[], buf2=[];
+const MAX_PTS=60;
+
+const ctx1=document.getElementById("osc1").getContext("2d");
+const ctx2=document.getElementById("osc2").getContext("2d");
+
+async function connect(){
+  const device = await navigator.bluetooth.requestDevice({
+    filters:[{name:"ESP32_GESTOS"}],
+    optionalServices:["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]
+  });
+  const server=await device.gatt.connect();
+  const service=await server.getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+  characteristic=await service.getCharacteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+  rxCharacteristic=await service.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+  characteristic.startNotifications();
+  characteristic.addEventListener("characteristicvaluechanged",handleData);
+  document.getElementById("status").innerText="Estado: Conectado";
+}
+
+function handleData(e){
+  const t=new TextDecoder().decode(e.target.value);
+  const p=t.split(",");
+  let g1=parseFloat(p[0].split(":")[1]);
+  let g2=parseFloat(p[1].split(":")[1]);
+  let motor=p[2].split(":")[1];
+  let falla=p[3].split(":")[1];
+
+  document.getElementById("g1").innerText=g1.toFixed(4);
+  document.getElementById("g2").innerText=g2.toFixed(4);
+
+  if(g1>g1max){g1max=g1;document.getElementById("g1max").innerText=g1max.toFixed(4);}
+  if(g2>g2max){g2max=g2;document.getElementById("g2max").innerText=g2max.toFixed(4);}
+
+  buf1.push(g1); if(buf1.length>MAX_PTS) buf1.shift();
+  buf2.push(g2); if(buf2.length>MAX_PTS) buf2.shift();
+  drawOsc(ctx1,buf1);
+  drawOsc(ctx2,buf2);
+
+  const led=document.getElementById("motorLed");
+  if(motor==="ON"){led.style.background="green";}
+  else if(falla==="BOBINADO"){led.style.background="red";}
+  else if(falla==="RODAMIENTO"){led.style.background="orange";}
+  else led.style.background="gray";
+}
+
+function drawOsc(ctx,buf){
+  ctx.clearRect(0,0,180,80);
+  ctx.strokeStyle="#00ffcc";
+  ctx.beginPath();
+  let mid=40;
+  buf.forEach((v,i)=>{
+    let y=mid - v*30;
+    ctx.lineTo(i*3,y);
+  });
+  ctx.stroke();
+}
+
+function rearme(){rxCharacteristic.writeValue(new TextEncoder().encode("REARME"));}
+function lubOn(){rxCharacteristic.writeValue(new TextEncoder().encode("LUB_ON"));}
+function lubOff(){rxCharacteristic.writeValue(new TextEncoder().encode("LUB_OFF"));}
+</script>
+
+</body>
+</html>
